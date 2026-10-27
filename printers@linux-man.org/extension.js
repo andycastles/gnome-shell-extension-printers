@@ -23,7 +23,7 @@ function exec_command(args) {
 
 // TODO: Reject on errors instead of always resolving (with '' on failure).
 // Callers must handle the rejection: refresh() needs try/catch/finally so
-// this.updating is always reset, as it's called without await.
+// this.updating is always reset, as runRefresh() is called without await.
 function exec_async(args) {
     return new Promise((resolve) => {
         let strOUT = '';
@@ -67,6 +67,7 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.printWarning = false;
         this.updating = false;
         this.menuIsOpen = false;
+        this._refreshNeeded = false;
         this._timeout = 0;
         this._settings = settings;
         this._settingsChangedId = this._settings.connect('changed', this.onSettingsChanged.bind(this));
@@ -81,11 +82,12 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
 
         this.menu.connect('open-state-changed', (self, open) => {
             this.menuIsOpen = open;
+            if(!open) this.runRefresh();
         });
 
         this._cupsSignal = Gio.DBus.system.signal_subscribe(null, 'org.cups.cupsd.Notifier', null, '/org/cups/cupsd/Notifier', null, Gio.DBusSignalFlags.NONE, this.onCupsSignal.bind(this));
 
-        this.refresh();
+        this.queueRefresh();
 
         if(!GLib.find_program_in_path('lpq')) exec_command(['notify-send', '-i', 'dialog-warning', '-a', _('Printers'), _('Missing dependency'), _('"lpq" command is missing! Please install "cups-bsd" package (if available).')])
     }
@@ -129,7 +131,6 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
     }
 
     async refresh() {
-        if (this._destroyed || this.menuIsOpen || this.updating) return;
         this.updating = true;
         this.connect_to = this._settings.get_enum('connect-to');
         this.show_icon = this._settings.get_enum('show-icon');
@@ -230,21 +231,34 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         else this.hide();
     }
 
+    // Triggers only mark the menu as out of date; runRefresh() decides
+    // when to refresh: not while the menu is open or a refresh is running.
+    queueRefresh() {
+        this._refreshNeeded = true;
+        this.runRefresh();
+    }
+    async runRefresh() {
+        if(this._destroyed || this.menuIsOpen || this.updating || !this._refreshNeeded) return;
+        this._refreshNeeded = false;
+        await this.refresh();
+        this.runRefresh(); // pick up changes made during the refresh
+    }
+
     onSettingsChanged() {
         if(this._destroyed) return;
-        this.refresh();
+        this.queueRefresh();
     }
     onCupsSignal() {
         if(this._destroyed || this.printWarning == true) return;
         this.printWarning = true;
         this._timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, this.warningTimeout.bind(this));
-        this.refresh();
+        this.queueRefresh();
     }
 
     warningTimeout() {
         this._timeout = 0;
         this.printWarning = false;
-        this.refresh();
+        this.queueRefresh();
         return GLib.SOURCE_REMOVE;
     }
 });

@@ -4,7 +4,7 @@ import stylistic from '@stylistic/eslint-plugin';
 export default [
     js.configs.recommended,
     {
-        files: ['printers@linux-man.org/**/*.js'],
+        files: ['printers@linux-man.org/**/*.js', 'tools/**/*.js'],
         plugins: {'@stylistic': stylistic},
         languageOptions: {
             ecmaVersion: 2022,

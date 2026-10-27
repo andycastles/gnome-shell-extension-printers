@@ -14,21 +14,24 @@ const errorIcon = 'printer-error-symbolic';
 
 function exec_command(args) {
     try {
-        let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+        Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
     }
     catch (e) {
         logError(e);
     }
 }
 
+// TODO: Reject on errors instead of always resolving (with '' on failure).
+// Callers must handle the rejection: refresh() needs try/catch/finally so
+// this.updating is always reset, as it's called without await.
 function exec_async(args) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         let strOUT = '';
         try {
             let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
             proc.communicate_utf8_async(null, null, (proc, res) => {
                 try {
-                    let [, stdout, stderr] = proc.communicate_utf8_finish(res);
+                    let [, stdout] = proc.communicate_utf8_finish(res);
                     if(proc.get_successful()) strOUT = stdout;
                 }
                 catch (e) {

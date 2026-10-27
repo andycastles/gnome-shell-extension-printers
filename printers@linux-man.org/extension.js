@@ -8,6 +8,8 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {CupsClient} from './ipp.js';
+
 const printerIcon = 'printer-symbolic';
 const warningIcon = 'printer-warning-symbolic';
 const errorIcon = 'printer-error-symbolic';
@@ -21,32 +23,10 @@ function exec_command(args) {
     }
 }
 
-// TODO: Reject on errors instead of always resolving (with '' on failure).
-// Callers must handle the rejection: refresh() needs try/catch/finally so
-// this.updating is always reset, as runRefresh() is called without await.
-function exec_async(args) {
-    return new Promise((resolve) => {
-        let strOUT = '';
-        try {
-            let proc = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-            proc.communicate_utf8_async(null, null, (proc, res) => {
-                try {
-                    let [, stdout] = proc.communicate_utf8_finish(res);
-                    if(proc.get_successful()) strOUT = stdout;
-                }
-                catch (e) {
-                    logError(e);
-                }
-                finally {
-                    resolve(strOUT);
-                }
-            });
-        }
-        catch (e) {
-            logError(e);
-            resolve(strOUT);
-        }
-    })
+// A printer-state-reasons keyword without a -report or -warning suffix is an
+// error (RFC 8011). 'none' and 'paused' (stopped by the user) aren't.
+function isErrorReason(reason) {
+    return reason != 'none' && reason != 'paused' && !reason.endsWith('-report') && !reason.endsWith('-warning');
 }
 
 function PopupIconMenuItem(icon, label) {
@@ -69,7 +49,10 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.menuIsOpen = false;
         this._refreshNeeded = false;
         this._timeout = 0;
+        this._retryTimeout = 0;
+        this._cupsUnavailable = false;
         this._settings = settings;
+        this._cups = new CupsClient();
         this._settingsChangedId = this._settings.connect('changed', this.onSettingsChanged.bind(this));
 
         let hbox = new St.BoxLayout({style_class: 'panel-status-menu-box' });
@@ -88,8 +71,6 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this._cupsSignal = Gio.DBus.system.signal_subscribe(null, 'org.cups.cupsd.Notifier', null, '/org/cups/cupsd/Notifier', null, Gio.DBusSignalFlags.NONE, this.onCupsSignal.bind(this));
 
         this.queueRefresh();
-
-        if(!GLib.find_program_in_path('lpq')) exec_command(['notify-send', '-i', 'dialog-warning', '-a', _('Printers'), _('Missing dependency'), _('"lpq" command is missing! Please install "cups-bsd" package (if available).')])
     }
 
     destroy() {
@@ -106,6 +87,11 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
             GLib.Source.remove(this._timeout);
             this._timeout = 0;
         }
+        if(this._retryTimeout) {
+            GLib.Source.remove(this._retryTimeout);
+            this._retryTimeout = 0;
+        }
+        this._cups.destroy();
         super.destroy();
     }
 
@@ -132,6 +118,40 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
 
     async refresh() {
         this.updating = true;
+        try {
+            await this.updateMenu();
+            this._cupsUnavailable = false;
+        }
+        catch (e) {
+            if(!this._destroyed) this.showUnavailable(e);
+        }
+        finally {
+            this.updating = false;
+        }
+    }
+
+    // CUPS can't be reached (not running, or not started yet). No CUPS signals
+    // arrive while it's down, so retry until a refresh succeeds.
+    showUnavailable(e) {
+        if(!this._cupsUnavailable) logError(e); // log once, not on every retry
+        this._cupsUnavailable = true;
+        this.menu.removeAll();
+        let printers = PopupIconMenuItem(printerIcon, _('Printers'));
+        printers.connect('activate', this.onShowPrintersClicked.bind(this));
+        this.menu.addMenuItem(printers);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addMenuItem(new PopupMenu.PopupMenuItem(_('Printing service unavailable'), {reactive: false}));
+        this._jobs.text = '';
+        this._icon.icon_name = errorIcon;
+        this.show(); // even with "show icon" set to printers/jobs only, so the error is visible
+        if(!this._retryTimeout) this._retryTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
+            this._retryTimeout = 0;
+            this.queueRefresh();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    async updateMenu() {
         this.connect_to = this._settings.get_enum('connect-to');
         this.show_icon = this._settings.get_enum('show-icon');
         this.show_error = this._settings.get_boolean('show-error');
@@ -139,91 +159,91 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.job_number = this._settings.get_boolean('job-number')
         this.send_to_front = this._settings.get_boolean('send-to-front')
 
+        let [p_list, p_default, p_jobs] = await Promise.all([
+            this._cups.getPrinters(),
+            this._cups.getDefaultPrinter(),
+            this._cups.getJobs(),
+        ]);
+        if(this._destroyed) return;
+
         this.menu.removeAll();
         let printers = PopupIconMenuItem(printerIcon, _('Printers'));
         printers.connect('activate', this.onShowPrintersClicked.bind(this));
         this.menu.addMenuItem(printers);
         //Add Printers
-        this.printers = [];
-        let p_list = await exec_async(['/usr/bin/lpstat', '-a']);
-        if(this._destroyed) return;
-        let p_default = await exec_async(['/usr/bin/lpstat', '-d']);
-        if(this._destroyed) return;
-        if(p_default.split(': ')[1] != undefined) p_default = p_default.split(': ')[1].trim();
-        else p_default = 'no default';
-        p_list = p_list.split('\n');
-        this.printersCount = p_list.length - 1;
-        if(this.printersCount > 0) {
-            if(this.connect_to == 1) this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            for(let n = 0; n < this.printersCount; n++) {
-                let printer = p_list[n].split(' ')[0];
-                this.printers.push(printer);
-                if(this.connect_to == 1) {
-                    let printerItem = PopupIconMenuItem('emblem-documents-symbolic', printer);
-                    if(p_default.toString() == printer.toString()) printerItem.setOrnament(PopupMenu.Ornament.CHECK);
-                    printerItem.printer = printer;
-                    printerItem.connect('activate', this.onShowJobsClicked.bind(this));
-                    this.menu.addMenuItem(printerItem);
-                }
+        this.printers = p_list.map(p => p['printer-name'][0]);
+        this.printersCount = this.printers.length;
+        if(this.printersCount > 0 && this.connect_to == 1) {
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for(let printer of this.printers) {
+                let printerItem = PopupIconMenuItem('emblem-documents-symbolic', printer);
+                if(printer == p_default) printerItem.setOrnament(PopupMenu.Ornament.CHECK);
+                printerItem.printer = printer;
+                printerItem.connect('activate', this.onShowJobsClicked.bind(this));
+                this.menu.addMenuItem(printerItem);
             }
         }
-        //Jobs
-        let p_jobs = await exec_async(['/usr/bin/lpstat', '-o']);
-        if(this._destroyed) return;
+        //Jobs, in the order CUPS will print them: highest priority first, then oldest
+        p_jobs.sort((a, b) => b['job-priority'][0] - a['job-priority'][0] || a['job-id'][0] - b['job-id'][0]);
+        this.jobsCount = p_jobs.length;
         //Cancel all Jobs
-        if(p_jobs.length > 0) {
+        if(this.jobsCount > 0) {
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             let cancelAll = PopupIconMenuItem('edit-delete-symbolic', _('Cancel all jobs'));
             cancelAll.connect('activate', this.onCancelAllJobsClicked.bind(this));
             this.menu.addMenuItem(cancelAll);
         }
-        //Add Jobs
-        p_jobs = p_jobs.split(/\n/);
-        this.jobsCount = p_jobs.length - 1
-        let p_jobs2 = await exec_async(['/usr/bin/lpq', '-a']);
-        if(this._destroyed) return;
-        p_jobs2 = p_jobs2.replace(/\n/g, ' ').split(/\s+/);
-        let sendJobs = [];
-        for(var n = 0; n < p_jobs.length - 1; n++) {
-            let line = p_jobs[n].split(' ')[0].split('-');
-            let job = line.slice(-1)[0];
-            let printer = line.slice(0, -1).join('-');
-            let doc = p_jobs2[p_jobs2.indexOf(job) + 1];
-            for(var m = p_jobs2.indexOf(job) + 2; m < p_jobs2.length - 1; m++) {
-                if(isNaN(p_jobs2[m]) || p_jobs2[m + 1] != 'bytes') doc = doc + ' ' + p_jobs2[m];
-                else break;
-            }
-            if(doc.length > 30) doc = doc + '...';
-            let text = doc;
-            if(this.job_number) text += ' (' + job + ')';
-            text += ' ' + _('at') + ' ' + printer;
-            let jobItem = PopupIconMenuItem('edit-delete-symbolic', text);
-            if(p_jobs2[p_jobs2.indexOf(job) - 2] == 'active') jobItem.setOrnament(PopupMenu.Ornament.CHECK);
-            jobItem.job = job;
-            jobItem.connect('activate', this.onCancelJobClicked.bind(jobItem));
-            this.menu.addMenuItem(jobItem);
-            if(this.send_to_front && p_jobs2[p_jobs2.indexOf(job) - 2] != 'active' && p_jobs2[p_jobs2.indexOf(job) - 2] != '1st') {
-                sendJobs.push(PopupIconMenuItem('go-up-symbolic', text));
-                sendJobs[sendJobs.length - 1].job = job;
-                sendJobs[sendJobs.length - 1].connect('activate', this.onSendToFrontClicked.bind(sendJobs[sendJobs.length - 1]));
-            }
+        //Add Jobs, grouped by printer (a Map keeps the sort order within each printer)
+        let printerJobs = new Map();
+        for(let p_job of p_jobs) {
+            let printer = p_job['job-printer-uri'][0].split('/').pop();
+            if(!printerJobs.has(printer)) printerJobs.set(printer, []);
+            printerJobs.get(printer).push(p_job);
         }
-        //Send to Front
-        if(this.send_to_front && sendJobs.length > 0) {
+        let sendJobs = new Map();
+        for(let [printer, jobs] of printerJobs) {
+            // A heading per printer replaces "at <printer>" on each job
+            if(this.printersCount > 1) this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(printer));
+            jobs.forEach((p_job, rank) => {
+                let job = p_job['job-id'][0].toString();
+                let active = p_job['job-state'][0] == 5; // processing
+                let doc = p_job['job-name'][0] ?? '';
+                if(doc.length > 30) doc = doc.substring(0, 30) + '...';
+                let text = doc;
+                if(this.job_number) text += ' (' + job + ')';
+                let jobItem = PopupIconMenuItem('edit-delete-symbolic', text);
+                if(active) jobItem.setOrnament(PopupMenu.Ornament.CHECK);
+                jobItem.job = job;
+                jobItem.connect('activate', this.onCancelJobClicked.bind(jobItem));
+                this.menu.addMenuItem(jobItem);
+                // Rank is per printer: each printer has its own queue
+                if(this.send_to_front && !active && rank > 0) {
+                    let sendItem = PopupIconMenuItem('go-up-symbolic', text);
+                    sendItem.job = job;
+                    sendItem.connect('activate', this.onSendToFrontClicked.bind(sendItem));
+                    if(!sendJobs.has(printer)) sendJobs.set(printer, []);
+                    sendJobs.get(printer).push(sendItem);
+                }
+            });
+        }
+        //Send to Front: submenus can't be nested, so headings group the jobs by printer
+        if(this.send_to_front && sendJobs.size > 0) {
             let subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Send to front'));
-            for(let n = 0; n < sendJobs.length; n++) subMenu.menu.addMenuItem(sendJobs[n]);
+            for(let [printer, items] of sendJobs) {
+                if(sendJobs.size > 1) subMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(printer));
+                for(let item of items) subMenu.menu.addMenuItem(item);
+            }
             this.menu.addMenuItem(subMenu);
         }
-        this.updating = false;
         //Update Icon
         if(this.jobsCount > 0 && this.show_jobs) this._jobs.text = this.jobsCount.toString();
         else this._jobs.text = '';
-        this.show();
         if(this.show_icon == 0 || (this.show_icon == 1 && this.printersCount > 0) || (this.show_icon == 2 && this.jobsCount > 0)) {
             this.show();
-            let p_error = await exec_async(['/usr/bin/lpstat', '-l']);
-            if(this._destroyed) return;
-            this.printError = p_error.indexOf('Unable') >= 0 || p_error.indexOf(' not ') >= 0 || p_error.indexOf(' failed') >= 0;
+            // Only direct queues: implicitclass (cups-browsed) queues never get the printer's reasons.
+            // CUPS may hide device-uri from non-admins: then use the reasons anyway.
+            this.printError = p_list.some(p => !p['device-uri']?.[0]?.startsWith('implicitclass:') &&
+                p['printer-state-reasons'].some(isErrorReason));
             if(this.printWarning) this._icon.icon_name = warningIcon;
             else if(this.show_error && this.printError) this._icon.icon_name = errorIcon;
             else this._icon.icon_name = printerIcon;

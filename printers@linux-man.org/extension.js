@@ -69,7 +69,7 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.menuIsOpen = false;
         this._timeout = 0;
         this._settings = settings;
-        this._settingsChangedId = this._settings.connect('changed', this.onCupsSignal.bind(this));
+        this._settingsChangedId = this._settings.connect('changed', this.onSettingsChanged.bind(this));
 
         let hbox = new St.BoxLayout({style_class: 'panel-status-menu-box' });
         this._icon = new St.Icon({icon_name: printerIcon, style_class: 'system-status-icon'});
@@ -85,7 +85,7 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
 
         this._cupsSignal = Gio.DBus.system.signal_subscribe(null, 'org.cups.cupsd.Notifier', null, '/org/cups/cupsd/Notifier', null, Gio.DBusSignalFlags.NONE, this.onCupsSignal.bind(this));
 
-        this.onCupsSignal();
+        this.refresh();
 
         if(!GLib.find_program_in_path('lpq')) exec_command(['notify-send', '-i', 'dialog-warning', '-a', _('Printers'), _('Missing dependency'), _('"lpq" command is missing! Please install "cups-bsd" package (if available).')])
     }
@@ -230,6 +230,10 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         else this.hide();
     }
 
+    onSettingsChanged() {
+        if(this._destroyed) return;
+        this.refresh();
+    }
     onCupsSignal() {
         if(this._destroyed || this.printWarning == true) return;
         this.printWarning = true;

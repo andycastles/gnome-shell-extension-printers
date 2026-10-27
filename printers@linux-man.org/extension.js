@@ -138,7 +138,7 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         let printers = PopupIconMenuItem(printerIcon, _('Printers'));
         printers.connect('activate', this.onShowPrintersClicked.bind(this));
         this.menu.addMenuItem(printers);
-//Add Printers
+        //Add Printers
         this.printers = [];
         let p_list = await exec_async(['/usr/bin/lpstat', '-a']);
         if(this._destroyed) return;
@@ -162,17 +162,17 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
                 }
             }
         }
-//Jobs
+        //Jobs
         let p_jobs = await exec_async(['/usr/bin/lpstat', '-o']);
         if(this._destroyed) return;
-//Cancel all Jobs
+        //Cancel all Jobs
         if(p_jobs.length > 0) {
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             let cancelAll = PopupIconMenuItem('edit-delete-symbolic', _('Cancel all jobs'));
             cancelAll.connect('activate', this.onCancelAllJobsClicked.bind(this));
             this.menu.addMenuItem(cancelAll);
         }
-//Add Jobs
+        //Add Jobs
         p_jobs = p_jobs.split(/\n/);
         this.jobsCount = p_jobs.length - 1
         let p_jobs2 = await exec_async(['/usr/bin/lpq', '-a']);
@@ -203,26 +203,26 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
                 sendJobs[sendJobs.length - 1].connect('activate', this.onSendToFrontClicked.bind(sendJobs[sendJobs.length - 1]));
             }
         }
-//Send to Front
+        //Send to Front
         if(this.send_to_front && sendJobs.length > 0) {
             let subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Send to front'));
             for(let n = 0; n < sendJobs.length; n++) subMenu.menu.addMenuItem(sendJobs[n]);
             this.menu.addMenuItem(subMenu);
         }
         this.updating = false;
-//Update Icon
+        //Update Icon
         if(this.jobsCount > 0 && this.show_jobs) this._jobs.text = this.jobsCount.toString();
         else this._jobs.text = '';
         this.show();
         if(this.show_icon == 0 || (this.show_icon == 1 && this.printersCount > 0) || (this.show_icon == 2 && this.jobsCount > 0)) {
-			this.show();
-			let p_error = await exec_async(['/usr/bin/lpstat', '-l']);
-			if(this._destroyed) return;
-			this.printError = p_error.indexOf('Unable') >= 0 || p_error.indexOf(' not ') >= 0 || p_error.indexOf(' failed') >= 0;
-			if(this.printWarning) this._icon.icon_name = warningIcon;
-			else if(this.show_error && this.printError) this._icon.icon_name = errorIcon;
-			else this._icon.icon_name = printerIcon;
-		}
+            this.show();
+            let p_error = await exec_async(['/usr/bin/lpstat', '-l']);
+            if(this._destroyed) return;
+            this.printError = p_error.indexOf('Unable') >= 0 || p_error.indexOf(' not ') >= 0 || p_error.indexOf(' failed') >= 0;
+            if(this.printWarning) this._icon.icon_name = warningIcon;
+            else if(this.show_error && this.printError) this._icon.icon_name = errorIcon;
+            else this._icon.icon_name = printerIcon;
+        }
         else this.hide();
     }
 

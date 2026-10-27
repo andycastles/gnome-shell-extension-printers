@@ -41,6 +41,7 @@ function exec_async(args) {
         }
         catch (e) {
             logError(e);
+            resolve(strOUT);
         }
     })
 }

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-04-05 20:50+0100\n"
+"POT-Creation-Date: 2026-10-28 11:09+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,29 +17,19 @@ msgstr ""
 "Content-Type: text/plain; charset=CHARSET\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: extension.js:87 extension.js:122 prefs.js:9
+#: extension.js:139 extension.js:170 prefs.js:9
 msgid "Printers"
 msgstr ""
 
-#: extension.js:87
-msgid "Missing dependency"
+#: extension.js:143
+msgid "Printing service unavailable"
 msgstr ""
 
-#: extension.js:87
-msgid ""
-"\"lpq\" command is missing! Please install \"cups-bsd\" package (if "
-"available)."
-msgstr ""
-
-#: extension.js:152
+#: extension.js:192
 msgid "Cancel all jobs"
 msgstr ""
 
-#: extension.js:174
-msgid "at"
-msgstr ""
-
-#: extension.js:188
+#: extension.js:231
 msgid "Send to front"
 msgstr ""
 

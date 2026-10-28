@@ -4,7 +4,7 @@ Gnome extension - Manage Jobs and Printers
 
 ![Screenshot](https://raw.githubusercontent.com/linux-man/gnome-shell-extension-printers/master/screenshot.png)
 
-### Required package: cups-bsd
+### Required package: cups-client
 
 #### License [GPL-3+](LICENSE)
 

@@ -29,6 +29,11 @@ function isErrorReason(reason) {
     return reason != 'none' && reason != 'paused' && !reason.endsWith('-report') && !reason.endsWith('-warning');
 }
 
+// For example toner-low-warning or media-low-warning
+function isWarningReason(reason) {
+    return reason.endsWith('-warning');
+}
+
 function PopupIconMenuItem(icon, label) {
     let _item = new PopupMenu.PopupImageMenuItem(label, icon, {});
     return _item;
@@ -44,12 +49,13 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.show_jobs = true;
         this.job_number = true;
         this.send_to_front = true;
+        this.printError = false;
         this.printWarning = false;
         this.updating = false;
         this.menuIsOpen = false;
         this._refreshNeeded = false;
-        this._timeout = 0;
         this._retryTimeout = 0;
+        this._signalTimeout = 0;
         this._cupsUnavailable = false;
         this._settings = settings;
         this._cups = new CupsClient();
@@ -83,13 +89,13 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
             this._settings.disconnect(this._settingsChangedId);
             this._settingsChangedId = 0;
         }
-        if(this._timeout) {
-            GLib.Source.remove(this._timeout);
-            this._timeout = 0;
-        }
         if(this._retryTimeout) {
             GLib.Source.remove(this._retryTimeout);
             this._retryTimeout = 0;
+        }
+        if(this._signalTimeout) {
+            GLib.Source.remove(this._signalTimeout);
+            this._signalTimeout = 0;
         }
         this._cups.destroy();
         super.destroy();
@@ -120,7 +126,6 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.updating = true;
         try {
             await this.updateMenu();
-            this._cupsUnavailable = false;
         }
         catch (e) {
             if(!this._destroyed) this.showUnavailable(e);
@@ -142,13 +147,20 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(_('Printing service unavailable'), {reactive: false}));
         this._jobs.text = '';
-        this._icon.icon_name = errorIcon;
+        this.updateIcon();
         this.show(); // even with "show icon" set to printers/jobs only, so the error is visible
         if(!this._retryTimeout) this._retryTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10, () => {
             this._retryTimeout = 0;
             this.queueRefresh();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    updateIcon() {
+        if(this._cupsUnavailable) this._icon.icon_name = errorIcon;
+        else if(this.show_error && this.printError) this._icon.icon_name = errorIcon;
+        else if(this.show_error && this.printWarning) this._icon.icon_name = warningIcon;
+        else this._icon.icon_name = printerIcon;
     }
 
     async updateMenu() {
@@ -165,6 +177,7 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
             this._cups.getJobs(),
         ]);
         if(this._destroyed) return;
+        this._cupsUnavailable = false;
 
         this.menu.removeAll();
         let printers = PopupIconMenuItem(printerIcon, _('Printers'));
@@ -242,11 +255,11 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
             this.show();
             // Only direct queues: implicitclass (cups-browsed) queues never get the printer's reasons.
             // CUPS may hide device-uri from non-admins: then use the reasons anyway.
-            this.printError = p_list.some(p => !p['device-uri']?.[0]?.startsWith('implicitclass:') &&
-                p['printer-state-reasons'].some(isErrorReason));
-            if(this.printWarning) this._icon.icon_name = warningIcon;
-            else if(this.show_error && this.printError) this._icon.icon_name = errorIcon;
-            else this._icon.icon_name = printerIcon;
+            let reasons = p_list.filter(p => !p['device-uri']?.[0]?.startsWith('implicitclass:'))
+                .flatMap(p => p['printer-state-reasons']);
+            this.printError = reasons.some(isErrorReason);
+            this.printWarning = reasons.some(isWarningReason);
+            this.updateIcon();
         }
         else this.hide();
     }
@@ -268,18 +281,17 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         if(this._destroyed) return;
         this.queueRefresh();
     }
+    // A print job sends dozens of signals. Refresh at most once a second:
+    // the first signal starts the timer, the ones until it fires share it.
+    // (The timer isn't restarted by each signal, so a long stream of signals
+    // still refreshes every second.)
     onCupsSignal() {
-        if(this._destroyed || this.printWarning == true) return;
-        this.printWarning = true;
-        this._timeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, this.warningTimeout.bind(this));
-        this.queueRefresh();
-    }
-
-    warningTimeout() {
-        this._timeout = 0;
-        this.printWarning = false;
-        this.queueRefresh();
-        return GLib.SOURCE_REMOVE;
+        if(this._destroyed) return;
+        if(!this._signalTimeout) this._signalTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this._signalTimeout = 0;
+            this.queueRefresh();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 });
 

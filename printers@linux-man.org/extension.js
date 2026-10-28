@@ -34,6 +34,12 @@ function isWarningReason(reason) {
     return reason.endsWith('-warning');
 }
 
+// media-empty-error -> "Media empty", for printers without a printer-state-message
+function describeReason(reason) {
+    let text = reason.replace(/-(error|warning|report)$/, '').replace(/-/g, ' ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function PopupIconMenuItem(icon, label) {
     let _item = new PopupMenu.PopupImageMenuItem(label, icon, {});
     return _item;
@@ -183,6 +189,26 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         let printers = PopupIconMenuItem(printerIcon, _('Printers'));
         printers.connect('activate', this.onShowPrintersClicked.bind(this));
         this.menu.addMenuItem(printers);
+        // Only direct queues: implicitclass (cups-browsed) queues never get the printer's reasons.
+        // CUPS may hide device-uri from non-admins: then use the reasons anyway.
+        let p_direct = p_list.filter(p => !p['device-uri']?.[0]?.startsWith('implicitclass:'));
+        //Printers with errors or warnings, so it's clear which printer the icon is about
+        let p_problems = p_direct.map(p => {
+            let reasons = p['printer-state-reasons'];
+            let reason = reasons.find(isErrorReason) ?? reasons.find(isWarningReason);
+            return {p, reason};
+        }).filter(({reason}) => reason);
+        if(p_problems.length > 0) {
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for(let {p, reason} of p_problems) {
+                let printer = p['printer-name'][0];
+                let message = p['printer-state-message']?.[0] || describeReason(reason);
+                let problemItem = PopupIconMenuItem(isErrorReason(reason) ? errorIcon : warningIcon, printer + ': ' + message);
+                problemItem.printer = printer;
+                problemItem.connect('activate', this.connect_to == 1 ? this.onShowJobsClicked.bind(this) : this.onShowPrintersClicked.bind(this));
+                this.menu.addMenuItem(problemItem);
+            }
+        }
         //Add Printers
         this.printers = p_list.map(p => p['printer-name'][0]);
         this.printersCount = this.printers.length;
@@ -253,12 +279,8 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         else this._jobs.text = '';
         if(this.show_icon == 0 || (this.show_icon == 1 && this.printersCount > 0) || (this.show_icon == 2 && this.jobsCount > 0)) {
             this.show();
-            // Only direct queues: implicitclass (cups-browsed) queues never get the printer's reasons.
-            // CUPS may hide device-uri from non-admins: then use the reasons anyway.
-            let reasons = p_list.filter(p => !p['device-uri']?.[0]?.startsWith('implicitclass:'))
-                .flatMap(p => p['printer-state-reasons']);
-            this.printError = reasons.some(isErrorReason);
-            this.printWarning = reasons.some(isWarningReason);
+            this.printError = p_problems.some(({reason}) => isErrorReason(reason));
+            this.printWarning = p_problems.length > 0;
             this.updateIcon();
         }
         else this.hide();

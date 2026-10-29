@@ -1,6 +1,11 @@
 // Minimal IPP client for reading printer and job state from the local CUPS
 // server, instead of parsing lpstat/lpq output. Only what the extension needs:
 // encode a request, POST it to CUPS, decode the response.
+//
+// IPP encoding: https://www.rfc-editor.org/rfc/rfc8010
+// IPP operations and attributes: https://www.rfc-editor.org/rfc/rfc8011
+// CUPS operations (CUPS-Get-Printers, CUPS-Get-Default):
+// https://openprinting.github.io/cups/doc/spec-ipp.html
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import Soup from 'gi://Soup?version=3.0';

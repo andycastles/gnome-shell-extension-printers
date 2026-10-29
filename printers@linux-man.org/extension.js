@@ -24,9 +24,13 @@ function exec_command(args) {
 }
 
 // A printer-state-reasons keyword without a -report or -warning suffix is an
-// error (RFC 8011). 'none' and 'paused' (stopped by the user) aren't.
+// error (RFC 8011), except for these, which only say what CUPS is doing
+// ('paused': stopped by the user)
+const notErrorReasons = ['none', 'paused', 'moving-to-paused', 'connecting-to-device'];
+
 function isErrorReason(reason) {
-    return reason != 'none' && reason != 'paused' && !reason.endsWith('-report') && !reason.endsWith('-warning');
+    return !notErrorReasons.includes(reason) && !reason.startsWith('cups-') &&
+        !reason.endsWith('-report') && !reason.endsWith('-warning');
 }
 
 // For example toner-low-warning or media-low-warning

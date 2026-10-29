@@ -34,7 +34,7 @@ function isWarningReason(reason) {
     return reason.endsWith('-warning');
 }
 
-// media-empty-error -> "Media empty", for printers without a printer-state-message
+// media-empty-error -> "Media empty"
 function describeReason(reason) {
     let text = reason.replace(/-(error|warning|report)$/, '').replace(/-/g, ' ');
     return text.charAt(0).toUpperCase() + text.slice(1);
@@ -202,7 +202,9 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             for(let {p, reason} of p_problems) {
                 let printer = p['printer-name'][0];
-                let message = p['printer-state-message']?.[0] || describeReason(reason);
+                // The reason, not printer-state-message: the message may describe
+                // another reason or be left over from a job, and wouldn't match the icon
+                let message = describeReason(reason);
                 let problemItem = PopupIconMenuItem(isErrorReason(reason) ? errorIcon : warningIcon, printer + ': ' + message);
                 problemItem.printer = printer;
                 problemItem.connect('activate', this.connect_to == 1 ? this.onShowJobsClicked.bind(this) : this.onShowPrintersClicked.bind(this));
@@ -222,8 +224,9 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
                 this.menu.addMenuItem(printerItem);
             }
         }
-        //Jobs, in the order CUPS will print them: highest priority first, then oldest
-        p_jobs.sort((a, b) => b['job-priority'][0] - a['job-priority'][0] || a['job-id'][0] - b['job-id'][0]);
+        //Jobs, in the order CUPS will print them: the printing one, then highest priority, then oldest
+        let printing = job => job['job-state'][0] == 5 ? 1 : 0; // processing
+        p_jobs.sort((a, b) => printing(b) - printing(a) || b['job-priority'][0] - a['job-priority'][0] || a['job-id'][0] - b['job-id'][0]);
         this.jobsCount = p_jobs.length;
         //Cancel all Jobs
         if(this.jobsCount > 0) {
@@ -243,7 +246,8 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         for(let [printer, jobs] of printerJobs) {
             // A heading per printer replaces "at <printer>" on each job
             if(this.printersCount > 1) this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem(printer));
-            jobs.forEach((p_job, rank) => {
+            let waiting = 0; // jobs before this one that aren't printing yet
+            jobs.forEach(p_job => {
                 let job = p_job['job-id'][0].toString();
                 let active = p_job['job-state'][0] == 5; // processing
                 let doc = p_job['job-name'][0] ?? '';
@@ -255,8 +259,9 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
                 jobItem.job = job;
                 jobItem.connect('activate', this.onCancelJobClicked.bind(jobItem));
                 this.menu.addMenuItem(jobItem);
-                // Rank is per printer: each printer has its own queue
-                if(this.send_to_front && !active && rank > 0) {
+                // Per printer, as each printer has its own queue. The first waiting
+                // job is already at the front (lpq calls it "1st", after "active").
+                if(!active && waiting++ > 0 && this.send_to_front) {
                     let sendItem = PopupIconMenuItem('go-up-symbolic', text);
                     sendItem.job = job;
                     sendItem.connect('activate', this.onSendToFrontClicked.bind(sendItem));

@@ -196,8 +196,12 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
         // Only direct queues: implicitclass (cups-browsed) queues never get the printer's reasons.
         // CUPS may hide device-uri from non-admins: then use the reasons anyway.
         let p_direct = p_list.filter(p => !p['device-uri']?.[0]?.startsWith('implicitclass:'));
+        // CUPS only checks a printer while a job is being sent to it, so other printers' reasons
+        // may be stale (e.g. still input-tray-missing after the tray is back)
+        let p_sending = new Set(p_jobs.filter(job => job['job-state'][0] == 5) // processing
+            .map(job => job['job-printer-uri'][0].split('/').pop()));
         //Printers with errors or warnings, so it's clear which printer the icon is about
-        let p_problems = p_direct.map(p => {
+        let p_problems = p_direct.filter(p => p_sending.has(p['printer-name'][0])).map(p => {
             let reasons = p['printer-state-reasons'];
             let reason = reasons.find(isErrorReason) ?? reasons.find(isWarningReason);
             return {p, reason};

@@ -231,9 +231,17 @@ export class CupsClient {
         return response;
     }
 
+    // Like _check, but not-found is an empty result: CUPS answers with it
+    // when there are no queues (e.g. once a temporary queue is removed)
+    _checkFound(response) {
+        if (response.statusCode === Status.NOT_FOUND)
+            return {...response, groups: []};
+        return this._check(response);
+    }
+
     // All local queues, as printer attribute objects
     async getPrinters() {
-        const response = this._check(await this._request(Operation.CUPS_GET_PRINTERS, [
+        const response = this._checkFound(await this._request(Operation.CUPS_GET_PRINTERS, [
             [Tag.KEYWORD, 'requested-attributes', [
                 'printer-name', 'printer-state', 'printer-state-reasons',
                 'printer-state-message', 'printer-is-accepting-jobs', 'device-uri',
@@ -256,7 +264,7 @@ export class CupsClient {
 
     // Not-completed jobs on all printers, as job attribute objects
     async getJobs() {
-        const response = this._check(await this._request(Operation.GET_JOBS, [
+        const response = this._checkFound(await this._request(Operation.GET_JOBS, [
             [Tag.URI, 'printer-uri', 'ipp://localhost/'],
             [Tag.NAME, 'requesting-user-name', GLib.get_user_name()],
             [Tag.KEYWORD, 'which-jobs', 'not-completed'],

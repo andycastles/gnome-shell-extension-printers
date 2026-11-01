@@ -1,6 +1,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 export default class MyExtensionPreferences extends ExtensionPreferences {
@@ -9,19 +10,24 @@ export default class MyExtensionPreferences extends ExtensionPreferences {
         window.title = _('Printers');
         const page = new Adw.PreferencesPage();
         const group = new Adw.PreferencesGroup();
-        //Interface
-        let model = new Gtk.StringList();
-        model.append(_('Gnome Control Center'));
-        model.append(_('system-config-printer'));
-        let combo = new Adw.ComboRow({
-            title: _('Interface'),
-            model: model,
-            selected: window._settings.get_enum('connect-to')
-        });
-        combo.connect('notify::selected', (widget)=>{
-            window._settings.set_enum('connect-to', widget.selected);
-        });
-        group.add(combo);
+        let model, combo;
+        //Interface, only if there is a choice or it's set to a missing system-config-printer
+        let installed = GLib.find_program_in_path('system-config-printer') !== null;
+        if(installed || window._settings.get_enum('connect-to') == 1) {
+            model = new Gtk.StringList();
+            model.append(_('Gnome Control Center'));
+            model.append(_('system-config-printer'));
+            combo = new Adw.ComboRow({
+                title: _('Interface'),
+                subtitle: installed ? '' : _('system-config-printer is not installed'),
+                model: model,
+                selected: window._settings.get_enum('connect-to')
+            });
+            combo.connect('notify::selected', (widget)=>{
+                window._settings.set_enum('connect-to', widget.selected);
+            });
+            group.add(combo);
+        }
         //Show icon
         model = new Gtk.StringList();
         model.append(_('Always'));

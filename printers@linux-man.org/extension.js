@@ -175,6 +175,8 @@ const PrintersManager = GObject.registerClass(class PrintersManager extends Pane
 
     async updateMenu() {
         this.connect_to = this._settings.get_enum('connect-to');
+        //system-config-printer not installed: use Gnome Control Center
+        if(this.connect_to == 1 && !GLib.find_program_in_path('system-config-printer')) this.connect_to = 0;
         this.show_icon = this._settings.get_enum('show-icon');
         this.show_error = this._settings.get_boolean('show-error');
         this.show_jobs = this._settings.get_boolean('show-jobs');

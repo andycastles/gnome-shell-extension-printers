@@ -11,13 +11,15 @@ export default class MyExtensionPreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
         const group = new Adw.PreferencesGroup();
         let model, combo;
-        //Interface, only if there is a choice
-        if(GLib.find_program_in_path('system-config-printer')) {
+        //Interface, only if there is a choice or it's set to a missing system-config-printer
+        let installed = GLib.find_program_in_path('system-config-printer') !== null;
+        if(installed || window._settings.get_enum('connect-to') == 1) {
             model = new Gtk.StringList();
             model.append(_('Gnome Control Center'));
             model.append(_('system-config-printer'));
             combo = new Adw.ComboRow({
                 title: _('Interface'),
+                subtitle: installed ? '' : _('system-config-printer is not installed'),
                 model: model,
                 selected: window._settings.get_enum('connect-to')
             });
